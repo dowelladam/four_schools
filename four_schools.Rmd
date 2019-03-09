@@ -1,0 +1,323 @@
+---
+title: "Investigation of 4 Elementary Schools"
+author: "Adam Dowell"
+date: "December 8, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Overview
+At DCPS, district leadership often reviews school performance so we can better support schools. We look at which schools are doing well, which schools are struggling (and in what way), and how can we better support schools. To demonstrate a simplifed version of this process, we're going to look at four schools serving grades K-8 --- Malcom X ES, Simon ES, Tubman ES, and Takoma EC. We'll focus on student engagement and student academic performance, as measured through several metrics over several years.
+
+
+#### Key Takeaways
+* Malcolm X ES has historically been one of the worst performers on PARCC, but students have made very strong gains from this low baseline over the past two years.
+* Simon ES is showing troubling trends on PARCC but has a largely satisfactory school climate.
+* Takoma EC has poor student engagement metrics, but largely mirrors district PARCC performance.
+* Tubman ES does not show any significant differences from district trends except for a strong drop in student satisfaction.
+
+## Metrics Used
+To develop an understanding of each school's longitudinal trajectory, we chose to investigate four metrics that shed light on different aspects of a school's health. The first three provide a composite measure of student engagement, and the fourth (PARCC) provides a measure of student academic performance. All of these datasets are [available for public download](https://dcps.dc.gov/node/1018312), although my source files are structured differently because I pulled them directly from our internal reporting platforms.
+ 
+#### In-Seat Attendance Rate (ISA)
+In-Seat Attendance (ISA) is the percent of school days for which students were present, or in-seat. Because this is intended to indicate the percent of students who are present for instruction, almost all absences count against the ISA rate. The only absences that do not count against ISA are in-school suspension absences and school activity absences (like field trips). Percentages are based on students' membership days. Younger students generally have high attendance rates, typically in the range of 90-100%. Attendance begins dropping off in the later middle school grades and can be as low as 65% at our comprehensive high schools. Pre-K students also have low and highly variable attendance rates.
+
+#### Student Satisfaction Rate
+The [student satisfaction survey](https://dcps.dc.gov/surveys) collects general data on school climate. It is also the way we have historically measured progress against DCPS' 4th Capital Commitment Goal, which states that 90% of students will say they like their school by 2017. DCPS administers satisfaction surveys to students in grades 3 and higher. The survey uses eight questions which are aggregated into a single Student Satisfaction Index (SSI). If students respond overall favorably to the questions in this index, they are considered to be "satisfied" with their school. We generally see the highest satisfaction rates in the elementary grades and the lowest rates in the middle grades.
+
+#### Student Suspensions
+This metric measures suspensions on a per capita basis to allow comparisons between schools of different sizes. It is based on the average number of registered students to smooth out day-to-day fluctuations in enrollment. There are a few things to keep in mind when evaluating this rate. First, the metric does not consider the length of suspensions. Second, suspensions are much rarer in the lower grades. Third, DCPS has made a very diligent push to reduce suspension rates district wide over the last few years. Fourth, because of this push, some schools have been known to underreport their suspensions, although we do not consider it a large or systemic problem.
+
+#### PARCC
+OSSE mandated that all LEAs begin using PARCC as the primary accountability metric in SY14-15. This replaced the DC-CAS. PARCC covers English and Math and is administered to students in grades 3-8. There is also an English and Math test for students in grade 10, but the business rules around which students take this test have varied over the years. Students are recorded as scoring in one of five levels. Levels 4 and 5 are considered college-ready.
+
+
+## Code walkthrough
+
+Here, we'll walkthough the process of creating the report in R. Begin by installing several tidyverse packages and loading the data.
+
+```{r}
+## load libraries
+library(dplyr, warn.conflicts = FALSE)
+library(ggplot2, warn.conflicts = FALSE)
+library(tidyr, warn.conflicts = FALSE)
+library(ggpubr, warn.conflicts = FALSE)
+
+## load data
+engagement <- read.csv("./data/engagement.csv", stringsAsFactors = FALSE)
+schoolPARCC <- read.csv("./data/school-level PARCC.csv", stringsAsFactors = FALSE)
+districtPARCC <- read.csv("./data/district-level PARCC.csv", stringsAsFactors = FALSE)
+```
+
+
+
+#### PARCC Data
+
+We want to be able to evaulate school results against district averages. Unfortunately, our "school" and "district" data files are organized differently. The "school" file aggregates results across all grades for that school. However, some schools serve different grade bands, and we know that different grade bands perform differently on PARCC, so it would be inappropriate to compare schools against a simple district average. Instead we'll calculate two new district averages [endash] --- one for Elementary Schools serving grades K-5, and one for lower-level Education Campuses serving grades K-8. We'll also give these metrics virtual school codes to facilitate future analysis (codes 9901 and 9902 respectively). These district averages will be the baseline that we compare our 4 schools against. 
+```{r}
+## switch PARCC to wide
+schoolLong <- gather(schoolPARCC, "Level", "Percentage", 5:9)
+districtLong <- gather(districtPARCC, "Level", "Percentage", 5:9)
+# calculate district averages for comparison
+districtLong <- districtLong %>%
+  mutate(n.level = N.Size * Percentage)
+# calculate ES average (grades 3-5)
+## will store with School Code == 9901
+esMean <- filter(districtLong, Grade <= 5)
+esMean <- esMean %>%
+  group_by(Subject, Year, Level) %>%
+  mutate(n.level.all.grades = sum(n.level)) %>%
+  mutate(n.size.all.grades = sum(N.Size)) %>%
+  mutate(percentage.all.grades = n.level.all.grades / n.size.all.grades) %>%
+  select(Subject, Year, Level, percentage.all.grades) %>%
+  distinct() %>%
+  mutate(School.Code = 9901) %>%
+  mutate(School = "ES DCPS Average") %>%
+  select(School.Code, School, Subject, School.Year=Year, Level,
+         Percentage=percentage.all.grades)
+# calculate EC average (grades 3-8)
+## same as above except different grades are filtered out
+## will store with School Code == 9902
+ecMean <- filter(districtLong, Grade <= 8)
+ecMean <- ecMean %>%
+  group_by(Subject, Year, Level) %>%
+  mutate(n.level.all.grades = sum(n.level)) %>%
+  mutate(n.size.all.grades = sum(N.Size)) %>%
+  mutate(percentage.all.grades = n.level.all.grades / n.size.all.grades) %>%
+  # remove unnecessary columns and the resulting duplicates
+  select(Subject, Year, Level, percentage.all.grades) %>%
+  distinct() %>%
+  mutate(School.Code = 9902) %>%
+  mutate(School = "EC DCPS Average") %>%
+  # re-name and re-arrange columns to match order in schoolLong
+  select(School.Code, School, Subject, School.Year=Year, Level,
+         Percentage=percentage.all.grades)
+
+
+# combine district data with school data
+data <- bind_rows(schoolLong, esMean, ecMean)
+data$School.Year <- as.factor(data$School.Year)
+data$Level <- as.factor(data$Level)
+
+```
+
+
+
+Now we'll write a function to create a 5x2 matrix of PARCC scores for a given school. Right now the function is specific to these four schools. If we add additional schools we'll need to adjust the logic. Otherwise the graphs will have the wrong baseline.
+```{r}
+## function makes the facet grid plots of PARCC data for any school
+## pass the school code as the argument (schoolCode)
+plotParccBar <- function(schoolCode) {
+  ## Use the EC average for comparison if Takoma is selected.
+  ## Otherwise use ES average
+  if (schoolCode == 324) {
+    district.average <-  9902
+  } else {
+    district.average <- 9901
+  }
+  
+  ## rename factors to replace the period with a space for better display
+  data$Level <- recode(data$Level, Level.5 = "Level 5", Level.4 = "Level 4",
+                       Level.3="Level 3", Level.2="Level 2", Level.1="Level 1")
+  ## place PARCC levels in descending order so Level 5 display on
+  ## top of trellis
+  ##    graph and Level 1 displays on bottom
+  data$Level <- factor(data$Level,levels = c("Level 5", "Level 4", "Level 3",
+                                             "Level 2", "Level 1"))
+  ## make all percentages show to two decimal places (.92 or 92%)
+  data$Percentage <- round(data$Percentage, digits=2)
+  
+  plot.data <- data
+  plot.data <- plot.data %>%
+    filter(School.Code == schoolCode | School.Code == district.average) %>%
+    arrange(desc(Level))
+  
+  plot <- ggplot(data=plot.data, aes(x=School.Year, y=Percentage, group=School)) +
+    geom_bar(stat="identity", position=position_dodge(),
+             aes(fill=Level, alpha=School)) +
+    geom_text(aes(label = scales::percent(Percentage)), vjust=-1.0, position=position_dodge(.9), size=3) +
+    facet_grid(Level ~ Subject) +
+    scale_alpha_manual(values = c(0.4, 1)) +
+    scale_fill_manual(values = c("#009933", "#009933", "#e6e600", "#ff6600", "#cc0000")) +
+    theme_light() +
+    # display y-scale as 0% to 100%
+    expand_limits(y=c(0,.7)) +
+    scale_y_continuous(labels=scales::percent) +
+    ylab("Students Scoring at this Level") +
+    xlab("School Year") +
+    ggtitle("PARCC Results") +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    theme(legend.position = "bottom", legend.title=element_blank())
+  
+  ## display the plot
+  plot
+}
+
+```
+
+
+
+#### Student Engagement
+
+Student engagement is measeaured by three metrics --- attendance, suspensions, and student satisfactions. We'll create a graph for each metric and group them in a 3x1 matrix. Fortunately the data is already in a wide format and already includes district averages, so we don't need to do any data processing.
+```{r}
+# function makes the 3 plots of student engagement & groups them
+plotEngagement <- function(school.code) {
+  
+  ## filter to one school and the district average
+  engag <- engagement
+  engag <- engag %>%
+    filter(School.Code == school.code | School.Code == 999) %>%
+    ## and rename columns for better display
+    rename("ISA Rate (grades K-12)" = ISA.Rate..K.5.,
+           "Student Satisfaction Rate (grades 3-12)" =
+             Student.Satisfaction.Rate..3.5.,
+           "Suspensions per 100 Students (grades PK-12)" =
+             Suspensions.per.100.students..PK.12.)
+  
+  
+  ## ISA plot
+  plot.data <- engag
+  plot.data <- plot.data %>%
+    select(-`Suspensions per 100 Students (grades PK-12)`,
+           -`Student Satisfaction Rate (grades 3-12)`)
+  plot.ISA <- ggplot(data=plot.data,
+                     aes(x=School.Year, y=`ISA Rate (grades K-12)`,
+                         group=School, alpha=School)) +
+    geom_point(size=1) +
+    geom_line(size=1, color="#005283") +
+    theme_light() +
+    # display y-scale as 80% to 100%
+    expand_limits(y=c(.8,1)) +
+    scale_y_continuous(labels=scales::percent) +
+    ylab("") +
+    xlab("") +
+    ggtitle("In-Seat Attendance Rate (grades K-12)") +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    theme(legend.position = "none", legend.title=element_blank()) +
+    scale_alpha_discrete(range = c(0.5, 1))
+  
+  
+  ## Student Satisfaction Plot
+  plot.data <- engag
+  plot.data <- plot.data %>%
+    select(-`Suspensions per 100 Students (grades PK-12)`,
+           -`ISA Rate (grades K-12)`)
+  plot.Satsifcation <- ggplot(data=plot.data, aes(x=School.Year,
+                                     y=`Student Satisfaction Rate (grades 3-12)`,
+                                     group=School, alpha=School)) +
+    geom_point(size=1) +
+    geom_line(size=1, color="#005283") +
+    theme_light() +
+    # display y-scale as 80% to 100%
+    expand_limits(y=c(.8,1)) +
+    scale_y_continuous(labels=scales::percent) +
+    ylab("") +
+    xlab("") +
+    ggtitle("Student Satisfaction Rate (grades 3-12)") +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    theme(legend.position = "none", legend.title=element_blank()) +
+    scale_alpha_discrete(range = c(0.5, 1))
+  
+  
+  ## Suspensions Plot
+  plot.data <- engag
+  plot.data <- plot.data %>%
+    select(-`ISA Rate (grades K-12)`,
+           -`Student Satisfaction Rate (grades 3-12)`)
+  plot.Suspensions <- ggplot(data=plot.data,
+                 aes(x=School.Year,
+                     y=`Suspensions per 100 Students (grades PK-12)`, 
+                     group=School, alpha=School)) +
+    geom_point(size=1) +
+    geom_line(size=1, color="#005283") +
+    theme_light() +
+    expand_limits(y=c(0,40)) +
+    ylab("") +
+    xlab("School Year") +
+    ggtitle("Suspensions per 100 Students (grades PK-12)") +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    theme(legend.position = "bottom", legend.title=element_blank()) +
+    scale_alpha_discrete(range = c(0.5, 1))
+  
+  
+  ## arrange all plots into one graphic
+  plot.engage <- ggarrange(plot.ISA, plot.Satsifcation, plot.Suspensions,
+            ncol = 1, nrow = 3)
+  
+  ## display the plot
+  plot.engage
+   
+}
+
+```
+
+
+
+## Malcolm X Elementary School
+
+#### Highlights
+* Malcolm X ES has been doing a very good job at decreasing the number of students performing on the lowest level of the PARCC.
+* Malcolm X ES had an extremely high suspension rate in SY14-15 before the leadership change, but reduced it in SY15-16.
+* Malcolm X ES experienced a decline in attendance in SY16-17.
+
+```{r fig.height = 9, fig.width = 7, echo=FALSE}
+plotParccBar(308)
+```
+
+```{r fig.height = 7, fig.width = 4.5, echo=FALSE}
+plotEngagement(308)
+```
+
+
+
+## Simon Elementary School
+
+#### Highlights
+* Simon ES has experienced large reductions in student performance on PARCC. Particularly troubling is the large increase in the number of students scoring at Level 1.
+* Student Engagement was poor in SY15-16 during Principal Holmes first year, but has largely recovered to SY14-15 levels. Specifically, student satisfaction has improved, but attendance and suspensions have regressed.
+
+```{r fig.height = 9, fig.width = 7, echo=FALSE}
+plotParccBar(315)
+```
+
+```{r fig.height = 7, fig.width = 4.5, echo=FALSE}
+plotEngagement(315)
+```
+
+## Takoma Education Campus
+
+#### Highlights
+* Takoma EC has experienced large declines in all student engagement metrics since SY15-16. Student Satisfaction dropped a remarkable 19 points in one year.
+* PARCC performance has largely mirrored district trends and has not shown significant improvement or deterioration since SY14-15.
+
+```{r fig.height = 9, fig.width = 7, echo=FALSE}
+plotParccBar(324)
+```
+
+```{r fig.height = 7, fig.width = 4.5, echo=FALSE}
+plotEngagement(324)
+``````
+
+## Tubman Elementary School
+
+#### Highlights
+* Tubman ES's rates of attendance and suspensions are similar to district levels, but student satisfaction has suffered significant declines, dropping 25 points in two years.
+* PARCC performance has largely mirrored district trends and has not shown significant improvement or deterioration since SY14-15.
+
+```{r fig.height = 9, fig.width = 7, echo=FALSE}
+plotParccBar(328)
+```
+
+```{r fig.height = 7, fig.width = 4.5, echo=FALSE}
+plotEngagement(328)
+```
+
+
+
+
+
+
